@@ -13,6 +13,8 @@
 
 static const char *TAG = "Neptune camera module";
 
+uint8_t neptuneCameraModuleError = 0;
+
 // camera pins
 #define CAM_PIN_PWDN 9
 #define CAM_PIN_RESET 11
@@ -40,6 +42,14 @@ static const char *TAG = "Neptune camera module";
 #define MOUNT_POINT "/sdcard"
 #define SEGMENT_US (30 * 1000 * 1000) // 30 s per file
 #define FSYNC_US (2 * 1000 * 1000) // flush FAT every 2 s
+
+// definging error codes
+#define cameraInitFail (1U << 0) // Camera init failed bit
+#define sdcardMountFail (1U << 1) // SDcard mount failed bit
+#define fileOpenFail (1U << 2) // file open fail bit
+#define frameGrabFail (1U << 3) // Frame grab fail bit
+#define writeError (1U << 4) // Write error fail
+#define recordingError (1U << 5) // Recording stopped
 
 // 12 bytes per frame, written to the .IDX sidecar
 typedef struct
@@ -83,9 +93,16 @@ static camera_config_t camera_config = {
 static esp_err_t camera_init(void)
 {
     esp_err_t err = esp_camera_init(&camera_config);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_camera_init failed: 0x%x", err);
+        neptuneCameraModuleError = neptuneCameraModuleError | cameraInitFail;
+
         return err;
+    }
+    else
+    {
+        neptuneCameraModuleError = (neptuneCameraModuleError) & (~cameraInitFail);
     }
  
     sensor_t *s = esp_camera_sensor_get();
@@ -130,8 +147,15 @@ static esp_err_t sd_init(void)
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "mount failed: %s", esp_err_to_name(err));
+        neptuneCameraModuleError = neptuneCameraModuleError | sdcardMountFail;
+
         return err;
     }
+    else
+    {
+        neptuneCameraModuleError = (neptuneCameraModuleError) & (~sdcardMountFail);
+    }
+
     sdmmc_card_print_info(stdout, s_card);
     return ESP_OK;
 }
@@ -168,7 +192,13 @@ static esp_err_t segment_open(segment_t *seg, uint32_t index)
     if (!seg->mjp)
     {
         ESP_LOGE(TAG, "cannot open %s", path);
+        neptuneCameraModuleError = neptuneCameraModuleError | fileOpenFail;
+
         return ESP_FAIL;
+    }
+    else
+    {
+        neptuneCameraModuleError = (neptuneCameraModuleError) & (~fileOpenFail);
     }
  
     snprintf(path, sizeof(path), MOUNT_POINT "/VID%05lu.IDX", (unsigned long)index);
@@ -177,7 +207,15 @@ static esp_err_t segment_open(segment_t *seg, uint32_t index)
     {
         fclose(seg->mjp);
         seg->mjp = NULL;
+
+        ESP_LOGE(TAG, "cannot open %s", path);
+        neptuneCameraModuleError = neptuneCameraModuleError | fileOpenFail;
+
         return ESP_FAIL;
+    }
+    else
+    {
+        neptuneCameraModuleError = (neptuneCameraModuleError) & (~fileOpenFail);
     }
  
     seg->opened_us = esp_timer_get_time();
@@ -219,8 +257,13 @@ static void record_task(void *arg)
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb)
         {
+            neptuneCameraModuleError = neptuneCameraModuleError | frameGrabFail;
             ESP_LOGW(TAG, "frame grab failed");
             continue;
+        }
+        else
+        {
+            neptuneCameraModuleError = (neptuneCameraModuleError) & (~frameGrabFail);
         }
  
         int64_t now = esp_timer_get_time();
@@ -229,7 +272,12 @@ static void record_task(void *arg)
         size_t written = fwrite(fb->buf, 1, fb->len, seg.mjp);
         if (written != fb->len)
         {
+            neptuneCameraModuleError = neptuneCameraModuleError | writeError;
             ESP_LOGE(TAG, "short write: %u/%u", (unsigned)written, (unsigned)fb->len);
+        }
+        else
+        {
+            neptuneCameraModuleError = (neptuneCameraModuleError) & (~writeError);
         }
  
         frame_rec_t rec = {
@@ -265,6 +313,7 @@ static void record_task(void *arg)
     }
  
     segment_close(&seg);
+    neptuneCameraModuleError = neptuneCameraModuleError | recordingError;
     vTaskDelete(NULL);
 }
 
