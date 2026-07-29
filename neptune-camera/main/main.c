@@ -15,6 +15,11 @@ static const char *TAG = "Neptune camera module";
 
 uint8_t neptuneCameraModuleError = 0;
 
+static QueueHandle_t LTEframeQueue;
+
+static StaticSemaphore_t sem_buf;
+static SemaphoreHandle_t LTEready;
+
 // camera pins
 #define CAM_PIN_PWDN -1
 #define CAM_PIN_RESET -1
@@ -85,9 +90,9 @@ static camera_config_t camera_config = {
     .pixel_format = PIXFORMAT_JPEG,
     .frame_size = FRAMESIZE_HD, // 1280x720
     .jpeg_quality = 12,
-    .fb_count = 2,
+    .fb_count = 5,
     .fb_location = CAMERA_FB_IN_PSRAM,
-    .grab_mode = CAMERA_GRAB_LATEST,
+    .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
 };
 
 static esp_err_t camera_init(void)
@@ -289,8 +294,23 @@ static void record_task(void *arg)
  
         seg.frames++;
         seg.bytes += fb->len;
- 
-        esp_camera_fb_return(fb);
+
+        // if the LTE task is not transmitting, give it a new frame (the LTE task should give back the buffer to the camera driver)
+        if (SemaphoreTake(LTEready, 0) == pdTRUE)
+        {
+            if (xQueueSend(LTEframeQueue, &fb, 0) == pdTRUE)
+            {
+                // frame is given to the LTE task
+            }
+            else
+            {
+                // won't ever get there
+            }
+        }
+        else
+        {
+            esp_camera_fb_return(fb);
+        }
  
         // Bound the data loss window on power cut.
         if (now - last_fsync > FSYNC_US)
@@ -317,10 +337,34 @@ static void record_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static void LTEsend(void *arg)
+{
+    camera_fb_t *LTEframe;
+
+    while (1)
+    {
+        // set the binary semphore so the SD task knows this task is ready to take a new frame to transmit
+        xSemaphoreGive(LTEready);
+
+        xQueueReceive(LTEframeQueue, &LTEframe, portMAX_DELAY); // getting the new frame
+
+        // sending the frame
+
+        // giving back the frambuffer
+        esp_camera_fb_return(LTEframe);
+    }
+}
+
 void app_main(void)
 {
-    ESP_ERROR_CHECK(camera_init());
-    ESP_ERROR_CHECK(sd_init());
+    LTEframeQueue = xQueueCreate(1, sizeof(camera_fb_t *)); // used to give a frame to the LTE task
+
+    LTEready = xSemaphoreCreateBinaryStatic(&sem_buf); // for LTE task frame grab protocol
+
+    ESP_ERROR_CHECK(camera_init()); // Camera init
+    ESP_ERROR_CHECK(sd_init()); // SD init
+    // LTE init
  
-    xTaskCreatePinnedToCore(record_task, "record", 8192, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(record_task, "record", 8192, NULL, 5, NULL, 1); // Create camera + sd task
+    // Create LTE task
 }
