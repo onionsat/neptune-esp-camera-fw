@@ -14,5 +14,7 @@
     "--query-driver=**",
     "--compile-commands-dir=c:\\Users\\robert\\Desktop\\neptune-esp-camera-fw\\neptune-camera\\build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.portWin": "COM6",
+  "idf.monitorPort": "COM6"
 }

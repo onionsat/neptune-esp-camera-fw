@@ -16,8 +16,8 @@ static const char *TAG = "Neptune camera module";
 uint8_t neptuneCameraModuleError = 0;
 
 // camera pins
-#define CAM_PIN_PWDN 9
-#define CAM_PIN_RESET 11
+#define CAM_PIN_PWDN -1
+#define CAM_PIN_RESET -1
 #define CAM_PIN_XCLK 14
 #define CAM_PIN_SCCB_SDA 18
 #define CAM_PIN_SCCB_SCL 8
